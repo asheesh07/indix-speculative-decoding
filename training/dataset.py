@@ -67,7 +67,7 @@ class HindiTextDataset(Dataset):
                     continue
 
                 # Tokenize
-                token_ids = self.tokenizer.encode(text)
+                token_ids = self.tokenizer.encode(text).ids
 
                 # Skip documents shorter than 64 tokens — not useful for LM
                 if len(token_ids) < 64:
