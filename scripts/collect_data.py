@@ -21,15 +21,13 @@ def collect_hindi_subset(target_size_gb=1.0):
 
     for example in dataset:
         text = example.get("text", "").strip()
-        
-        # Quality filters
-        if len(text) < 100:          # skip very short lines
+        if len(text) < 100:          
             skipped += 1
             continue
-        if len(text) > 100_000:      # skip abnormally long documents
+        if len(text) > 100_000:      
             skipped += 1
             continue
-        if not any('\u0900' <= c <= '\u097F' for c in text):  # must contain Devanagari
+        if not any('\u0900' <= c <= '\u097F' for c in text):  
             skipped += 1
             continue
             
@@ -37,12 +35,10 @@ def collect_hindi_subset(target_size_gb=1.0):
         total_bytes += len(text.encode("utf-8"))
         total_examples += 1
         
-        # Progress
         if total_examples % 10_000 == 0:
             gb_collected = total_bytes / (1024**3)
             print(f"  Examples: {total_examples:,} | Size: {gb_collected:.3f}GB | Skipped: {skipped:,}")
         
-        # Stop when target reached
         if total_bytes >= target_bytes:
             print(f"\n[DONE] Target reached.")
             break
@@ -54,26 +50,18 @@ def collect_hindi_subset(target_size_gb=1.0):
     
     return collected
 
-
 def save_and_split(texts, output_dir="data"):
     import os
     import random
     os.makedirs(output_dir, exist_ok=True)
-    
-    # Shuffle before split
     random.seed(42)
     random.shuffle(texts)
-    
-    # 90% train, 5% val, 5% test
-    n          = len(texts)
-    train_end  = int(n * 0.90)
-    val_end    = int(n * 0.95)
-    
+    n = len(texts)
+    train_end = int(n * 0.90)
+    val_end = int(n * 0.95)
     train = texts[:train_end]
-    val   = texts[train_end:val_end]
-    test  = texts[val_end:]
-    
-    # Save as jsonl
+    val = texts[train_end:val_end]
+    test = texts[val_end:]
     for split_name, split_data in [("train", train), ("val", val), ("test", test)]:
         path = f"{output_dir}/{split_name}.jsonl"
         with open(path, "w", encoding="utf-8") as f:
@@ -85,9 +73,6 @@ def save_and_split(texts, output_dir="data"):
     
     print(f"\n[IMPORTANT] Test set is now locked. Do not touch it until final evaluation.")
     return train, val, test
-
-
-# ── Run ───────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     texts = collect_hindi_subset(target_size_gb=1.0)
