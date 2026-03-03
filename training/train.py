@@ -417,6 +417,10 @@ def train(cfg: TrainConfig):
 def load_config(yaml_path: str) -> TrainConfig:
     with open(yaml_path) as f:
         data = yaml.safe_load(f)
+    if "learning_rate" in data:
+        data["learning_rate"] = float(data["learning_rate"])
+    if "min_lr" in data:
+        data["min_lr"] = float(data["min_lr"])
     return TrainConfig(**data)
 
 if __name__ == "__main__":
