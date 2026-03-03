@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from config import ModelConfig
+from model.config import ModelConfig_
 
 def causal_mask(seq_len: int, device: str = "cpu") -> torch.Tensor:
     mask = torch.tril(torch.ones(seq_len, seq_len, device=device))
@@ -74,8 +74,8 @@ class TransformerBlock(nn.Module):
         x = x + self.ff(self.norm2(x))
         return x
 
-class GPT2(nn.Module):
-    def __init__(self, cfg: ModelConfig):
+class GPT2_(nn.Module):
+    def __init__(self, cfg: ModelConfig_):
         super().__init__()
         self.embedding = Embedding(cfg.vocab_size, cfg.embed_size, cfg.max_length)
         self.blocks    = nn.ModuleList([

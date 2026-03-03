@@ -17,8 +17,8 @@ from tokenizers import Tokenizer
 
 import sys
 sys.path.append(str(Path(__file__).parent.parent))
-from model.gpt2 import GPT2
-from model.config import ModelConfig
+from model.gpt2 import GPT2_
+from model.config import ModelConfig_
 from training.dataset import get_dataloaders
 
 @dataclass
@@ -237,8 +237,8 @@ def train(cfg: TrainConfig):
     )
 
     print("\n[Setup] Initializing model...")
-    model_cfg = ModelConfig(vocab_size=vocab_size)
-    model     = GPT2(model_cfg).to(device)
+    model_cfg = ModelConfig_(vocab_size=vocab_size)
+    model     = GPT2_(model_cfg).to(device)
     n_params  = model.count_parameters()
     print(f"  Parameters: {n_params:,} ({n_params/1e6:.1f}M)")
 
