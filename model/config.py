@@ -8,7 +8,7 @@ class ModelConfig_:
     num_layers:int = 6
     heads:int = 6
     forward_expansion: int = 4
-    max_length:int = 512
+    max_length:int = 768
     dropout:float = 0.1
     
     @property
@@ -17,7 +17,7 @@ class ModelConfig_:
 
 if __name__ == "__main__":
     from gpt2 import GPT2
-    cfg   = ModelConfig()
+    cfg   = ModelConfig_()
     model = GPT2(cfg)
     params = model.count_parameters()
     print(f"Parameters: {params:,}")
