@@ -9,8 +9,8 @@ from tokenizers import Tokenizer
 from torch.utils.data import DataLoader
 import sys
 sys.path.append(str(Path(__file__).parent.parent))
-from model.gpt2 import GPT2
-from model.config import ModelConfig
+from model.gpt2 import GPT2_
+from model.config import ModelConfig_
 from training.dataset import HindiTextDataset
 from evaluation.perplexity import compute_perplexity
 
@@ -29,8 +29,8 @@ RUNS = [
 
 def load_model(checkpoint_path: str, vocab_size: int) -> nn.Module:
     state = torch.load(checkpoint_path, map_location=DEVICE)
-    cfg   = ModelConfig(vocab_size=vocab_size)
-    model = GPT2(cfg).to(DEVICE)
+    cfg   = ModelConfig_(vocab_size=vocab_size)
+    model = GPT2_(cfg).to(DEVICE)
     model.load_state_dict(state["model_state"])
     return model
 

@@ -9,8 +9,8 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 from tokenizers import Tokenizer as HFTokenizer
 import sys
 sys.path.append(str(Path(__file__).parent))
-from model.gpt2 import GPT2
-from model.config import ModelConfig
+from model.gpt2 import GPT2_
+from model.config import ModelConfig_
 
 DEVICE          = "cuda" if torch.cuda.is_available() else "cpu"
 TARGET_MODEL_ID = "Qwen/Qwen2.5-7B"
@@ -314,8 +314,8 @@ def main():
     your_tokenizer.eos_token_id = your_tokenizer.token_to_id("<eos>")
 
     checkpoint     = torch.load(CHECKPOINT_A, map_location=DEVICE)
-    model_cfg      = ModelConfig(vocab_size=your_tokenizer.get_vocab_size())
-    draft_model_a  = GPT2(model_cfg).to(DEVICE)
+    model_cfg      = ModelConfig_(vocab_size=your_tokenizer.get_vocab_size())
+    draft_model_a  = GPT2_(model_cfg).to(DEVICE)
     draft_model_a.load_state_dict(checkpoint["model_state"])
     draft_model_a.eval()
     print(f"  Loaded from step {checkpoint['step']:,}")

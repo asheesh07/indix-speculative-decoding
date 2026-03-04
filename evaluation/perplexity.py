@@ -18,8 +18,8 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 
 import sys
 sys.path.append(str(Path(__file__).parent.parent))
-from model.gpt2 import GPT2
-from model.config import ModelConfig
+from model.gpt2 import GPT2_
+from model.config import ModelConfig_
 from training.dataset import HindiTextDataset
 
 CHECKPOINT  = "checkpoints/best.pt"
@@ -59,8 +59,8 @@ def compute_perplexity(model, loader, device) -> tuple:
 
 def load_your_model(checkpoint_path: str, tokenizer) -> nn.Module:
     checkpoint = torch.load(checkpoint_path, map_location=DEVICE)
-    cfg        = ModelConfig(vocab_size=tokenizer.get_vocab_size())
-    model      = GPT2(cfg).to(DEVICE)
+    cfg        = ModelConfig_(vocab_size=tokenizer.get_vocab_size())
+    model      = GPT2_(cfg).to(DEVICE)
     model.load_state_dict(checkpoint["model_state"])
     print(f"  Loaded step {checkpoint['step']:,} | "
           f"checkpoint val PPL: {checkpoint['val_perplexity']:.4f}")
