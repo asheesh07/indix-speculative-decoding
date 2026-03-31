@@ -4,7 +4,7 @@ import time
 import torch
 import torch.nn.functional as F
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from tokenizers import Tokenizer as HFTokenizer
 import sys
@@ -18,9 +18,9 @@ DRAFT_B_ID      = "Qwen/Qwen2.5-0.5B"
 CHECKPOINT_A    = "checkpoints/best.pt"
 TOKENIZER_A     = "tokenizer/hindi_bpe/tokenizer.json"
 PROMPTS_PATH    = "speculative_decoding/prompts/hindi_prompts.jsonl"
-GAMMA           = 4        
+GAMMA           = 4
 MAX_NEW_TOKENS  = 100
-NUM_PROMPTS     = 200     
+NUM_PROMPTS     = 200
 
 OUTPUT_A        = "experiments/experiment_a/results"
 OUTPUT_B        = "experiments/experiment_b/results"
@@ -33,8 +33,8 @@ def max_fn(x: torch.Tensor) -> torch.Tensor:
 class VocabAligner:
     def __init__(self, your_tokenizer, qwen_tokenizer):
         print("[Aligner] Building vocabulary alignment map...")
-        your_vocab  = your_tokenizer.get_vocab()        
-        qwen_vocab  = qwen_tokenizer.get_vocab()         
+        your_vocab  = your_tokenizer.get_vocab()
+        qwen_vocab  = qwen_tokenizer.get_vocab()
         your_size   = len(your_vocab)
         qwen_size   = len(qwen_vocab)
         self.mapping = torch.zeros(your_size, dtype=torch.long)
@@ -67,83 +67,119 @@ class VocabAligner:
         )
         qwen_probs.scatter_add_(0, self.mapping.to(your_probs.device), your_probs)
         return qwen_probs
-    
+
+    def your_id_to_qwen_id(self, your_token_id: int) -> int:
+        """Return the Qwen vocab ID corresponding to a draft vocab ID."""
+        return self.mapping[your_token_id].item()
+
+
 @torch.no_grad()
 def autoregressive_baseline(
     target_model,
     input_ids:      torch.Tensor,
     max_new_tokens: int,
 ) -> Tuple[List[int], float]:
+    
     generated = input_ids.clone()
     t_start   = time.perf_counter()
 
     for _ in range(max_new_tokens):
         out    = target_model(input_ids=generated)
         logits = out.logits[:, -1, :]
-        next_t = torch.argmax(logits, dim=-1, keepdim=True)
+        # FIX: use multinomial sampling, not argmax, to match speculative_decode
+        probs  = F.softmax(logits, dim=-1)
+        next_t = torch.multinomial(probs, num_samples=1)
         generated = torch.cat([generated, next_t], dim=-1)
 
-        if next_t.item() in [target_model.config.eos_token_id]:
+        if next_t.item() == target_model.config.eos_token_id:
             break
 
     elapsed    = time.perf_counter() - t_start
     new_tokens = generated.shape[-1] - input_ids.shape[-1]
-    tps        = new_tokens / elapsed
+    tps        = new_tokens / max(elapsed, 1e-6)
 
     return generated[0].tolist(), tps
+
 
 @torch.no_grad()
 def speculative_decode(
     draft_model,
     target_model,
-    input_ids:      torch.Tensor,
-    gamma:          int,
-    max_new_tokens: int,
-    vocab_aligner   = None,   
+    input_ids:       torch.Tensor,
+    gamma:           int,
+    max_new_tokens:  int,
+    vocab_aligner:   Optional[object] = None,
+    draft_input_ids: Optional[torch.Tensor] = None,
 ) -> Tuple[List[int], float, float]:
-    generated         = input_ids.clone()
+    
+    generated      = input_ids.clone()        
+    draft_context  = draft_input_ids.clone() if draft_input_ids is not None \
+                     else input_ids.clone()
+
     drafts_accepted   = 0
     drafts_speculated = 0
     t_start           = time.perf_counter()
 
     while generated.shape[-1] - input_ids.shape[-1] < max_new_tokens:
-        seq_len         = generated.shape[-1]
-        actual_gamma    = min(gamma, max_new_tokens - (seq_len - input_ids.shape[-1]))
-        draft_tokens = []
-        draft_probs  = []
-        draft_input  = generated.clone()
+        seq_len      = generated.shape[-1]
+        actual_gamma = min(gamma, max_new_tokens - (seq_len - input_ids.shape[-1]))
 
+        draft_tokens     = []   
+        draft_probs_raw  = []  
+        draft_probs_aln  = []   
+        draft_input      = draft_context.clone()
+
+       
         for _ in range(actual_gamma):
             out   = draft_model(input_ids=draft_input)
-            logit = out.logits[:, -1, :]                        
-            prob  = F.softmax(logit, dim=-1).squeeze(0)          
-            if vocab_aligner is not None:
-                prob_aligned = vocab_aligner.align(prob)          
-            else:
-                prob_aligned = prob                               
+            logit = out.logits[:, -1, :] if hasattr(out, "logits") else out[:, -1, :]
+            prob  = F.softmax(logit, dim=-1).squeeze(0)   # [draft_vocab]
 
-            token = torch.multinomial(prob, num_samples=1)
+            if vocab_aligner is not None:
+                prob_aligned = vocab_aligner.align(prob)  
+            else:
+                prob_aligned = prob                        
+
+            # Sample in draft vocab space
+            token = torch.multinomial(prob, num_samples=1)   
             draft_tokens.append(token.item())
-            draft_probs.append(prob_aligned)
+            draft_probs_raw.append(prob)         
+            draft_probs_aln.append(prob_aligned)  
 
             draft_input = torch.cat(
                 [draft_input, token.unsqueeze(0)], dim=-1
             )
 
         drafts_speculated += actual_gamma
-        draft_sequence = draft_input                             
-        out_target     = target_model(input_ids=draft_sequence)
-        target_logits  = out_target.logits[0,
-                         seq_len - 1 : seq_len + actual_gamma - 1,
-                         :]                                       
-        target_probs   = F.softmax(target_logits, dim=-1)        
 
-        n = actual_gamma    
+        if vocab_aligner is not None:
+            draft_qwen_ids = torch.tensor(
+                [vocab_aligner.your_id_to_qwen_id(t) for t in draft_tokens],
+                dtype  = torch.long,
+                device = generated.device,
+            ).unsqueeze(0)                             
+            draft_sequence = torch.cat([generated, draft_qwen_ids], dim=-1)
+        else:
+            draft_sequence = draft_input              
+
+        out_target    = target_model(input_ids=draft_sequence)
+        target_logits = out_target.logits[0,
+                        seq_len - 1 : seq_len + actual_gamma - 1,
+                        :]                             
+        target_probs  = F.softmax(target_logits, dim=-1)
+
+        n = actual_gamma  
 
         for i in range(actual_gamma):
-            token_id = draft_tokens[i]
-            q_i = draft_probs[i][token_id].item()       
-            p_i = target_probs[i, token_id].item()      
+            token_id = draft_tokens[i]   
+
+            if vocab_aligner is not None:
+                q_i = draft_probs_raw[i][token_id].item()
+                qwen_id = vocab_aligner.your_id_to_qwen_id(token_id)
+                p_i = target_probs[i, qwen_id].item()
+            else:
+                q_i = draft_probs_raw[i][token_id].item()
+                p_i = target_probs[i, token_id].item()
 
             r = torch.rand(1).item()
             if r <= p_i / (q_i + 1e-8):
@@ -151,29 +187,59 @@ def speculative_decode(
             else:
                 n = i
                 break
+
         if n > 0:
-            accepted_tokens = torch.tensor(
+            if vocab_aligner is not None:
+                accepted_qwen = torch.tensor(
+                    [vocab_aligner.your_id_to_qwen_id(t) for t in draft_tokens[:n]],
+                    dtype  = torch.long,
+                    device = generated.device,
+                ).unsqueeze(0)
+                generated = torch.cat([generated, accepted_qwen], dim=-1)
+            else:
+                accepted_tokens = torch.tensor(
+                    draft_tokens[:n],
+                    dtype  = torch.long,
+                    device = generated.device,
+                ).unsqueeze(0)
+                generated = torch.cat([generated, accepted_tokens], dim=-1)
+            accepted_draft = torch.tensor(
                 draft_tokens[:n],
                 dtype  = torch.long,
-                device = generated.device,
+                device = draft_context.device,
             ).unsqueeze(0)
-            generated = torch.cat([generated, accepted_tokens], dim=-1)
-
+            draft_context = torch.cat([draft_context, accepted_draft], dim=-1)
         if n == actual_gamma:
             bonus_logit = out_target.logits[0, seq_len + actual_gamma - 1, :]
-            bonus_prob  = F.softmax(bonus_logit, dim=-1)
-            next_token  = torch.multinomial(bonus_prob, num_samples=1)
+            bonus_prob  = F.softmax(bonus_logit, dim=-1)    
+            next_token_qwen = torch.multinomial(bonus_prob, num_samples=1)  
         else:
-            p_n = target_probs[n]
-            q_n = draft_probs[n]
+            p_n = target_probs[n]              
+            q_n = draft_probs_aln[n]            
             adjusted = max_fn(p_n - q_n)
-            next_token = torch.multinomial(adjusted, num_samples=1)
-
+            next_token_qwen = torch.multinomial(adjusted, num_samples=1)    
         generated = torch.cat(
-            [generated, next_token.unsqueeze(0)], dim=-1
+            [generated, next_token_qwen.unsqueeze(0)], dim=-1
         )
 
-        if next_token.item() == target_model.config.eos_token_id:
+        if vocab_aligner is not None:
+            next_qwen_id = next_token_qwen.item()
+            reverse = (vocab_aligner.mapping == next_qwen_id).nonzero(as_tuple=True)[0]
+            if reverse.numel() > 0:
+                next_draft_id = reverse[0].unsqueeze(0).unsqueeze(0).to(draft_context.device)
+            else:
+                unk_draft_id = torch.tensor(
+                    [[vocab_aligner.your_tokenizer_unk_id
+                      if hasattr(vocab_aligner, "your_tokenizer_unk_id") else 1]],
+                    dtype=torch.long, device=draft_context.device,
+                )
+                next_draft_id = unk_draft_id
+        else:
+            next_draft_id = next_token_qwen.unsqueeze(0)
+
+        draft_context = torch.cat([draft_context, next_draft_id], dim=-1)
+
+        if next_token_qwen.item() == target_model.config.eos_token_id:
             break
 
     elapsed    = time.perf_counter() - t_start
@@ -182,6 +248,7 @@ def speculative_decode(
 
     acceptance_rate = drafts_accepted / max(drafts_speculated, 1)
     return generated[0].tolist(), acceptance_rate, tps
+
 
 def load_prompts(path: str, n: int) -> List[str]:
     prompts = []
@@ -194,14 +261,16 @@ def load_prompts(path: str, n: int) -> List[str]:
     print(f"[Prompts] Loaded {len(prompts)} prompts")
     return prompts
 
+
 def run_experiment(
-    name:          str,
+    name:            str,
     draft_model,
     target_model,
     qwen_tokenizer,
-    prompts:       List[str],
-    output_dir:    str,
-    vocab_aligner  = None,
+    prompts:         List[str],
+    output_dir:      str,
+    vocab_aligner    = None,
+    your_tokenizer   = None,   
 ) -> dict:
     os.makedirs(output_dir, exist_ok=True)
 
@@ -212,28 +281,43 @@ def run_experiment(
     print(f"Gamma:  {GAMMA}")
     print(f"{'='*50}\n")
 
+    if vocab_aligner is not None and your_tokenizer is None:
+        raise ValueError("your_tokenizer must be provided for Experiment A (cross-vocab)")
+
     all_acceptance  = []
     all_spec_tps    = []
     all_base_tps    = []
 
     for i, prompt in enumerate(prompts):
-        input_ids = qwen_tokenizer.encode(
+        
+        input_ids_qwen = qwen_tokenizer.encode(
             prompt,
-            return_tensors    = "pt",
-            max_length        = 128,
-            truncation        = True,
+            return_tensors     = "pt",
+            max_length         = 128,
+            truncation         = True,
             add_special_tokens = True,
         ).to(DEVICE)
+
+        if vocab_aligner is not None:
+            draft_ids = torch.tensor(
+                [your_tokenizer.encode(prompt, add_special_tokens=True).ids],
+                dtype  = torch.long,
+                device = DEVICE,
+            )
+        else:
+            draft_ids = None   
+
         _, base_tps = autoregressive_baseline(
-            target_model, input_ids, MAX_NEW_TOKENS
+            target_model, input_ids_qwen, MAX_NEW_TOKENS
         )
         _, acc_rate, spec_tps = speculative_decode(
-            draft_model    = draft_model,
-            target_model   = target_model,
-            input_ids      = input_ids,
-            gamma          = GAMMA,
-            max_new_tokens = MAX_NEW_TOKENS,
-            vocab_aligner  = vocab_aligner,
+            draft_model      = draft_model,
+            target_model     = target_model,
+            input_ids        = input_ids_qwen,
+            gamma            = GAMMA,
+            max_new_tokens   = MAX_NEW_TOKENS,
+            vocab_aligner    = vocab_aligner,
+            draft_input_ids  = draft_ids,     
         )
         all_acceptance.append(acc_rate)
         all_spec_tps.append(spec_tps)
@@ -245,10 +329,11 @@ def run_experiment(
                 f"acc={sum(all_acceptance)/len(all_acceptance):.3f} | "
                 f"speedup={sum(all_spec_tps)/sum(all_base_tps):.3f}x"
             )
+
     mean_acceptance = sum(all_acceptance) / len(all_acceptance)
     mean_spec_tps   = sum(all_spec_tps)   / len(all_spec_tps)
     mean_base_tps   = sum(all_base_tps)   / len(all_base_tps)
-    speedup         = mean_spec_tps / mean_base_tps
+    speedup = sum(all_spec_tps) / sum(all_base_tps)
 
     print(f"\n  Acceptance Rate:   {mean_acceptance:.4f}")
     print(f"  Speedup:           {speedup:.4f}x")
@@ -291,35 +376,41 @@ def run_experiment(
     print(f"  Saved to {output_dir}/")
 
     return {
-        "acceptance_rate":  mean_acceptance,
-        "speedup":          speedup,
+        "acceptance_rate":   mean_acceptance,
+        "speedup":           speedup,
         "tokens_per_second": mean_spec_tps,
     }
+
 
 def main():
     for path in [CHECKPOINT_A, TOKENIZER_A, PROMPTS_PATH]:
         assert Path(path).exists(), f"Not found: {path}"
+
     prompts = load_prompts(PROMPTS_PATH, NUM_PROMPTS)
+
     print("\n[Setup] Loading target model (Qwen2.5-7B)...")
     qwen_tokenizer = AutoTokenizer.from_pretrained(TARGET_MODEL_ID)
     target_model   = AutoModelForCausalLM.from_pretrained(
         TARGET_MODEL_ID,
-        torch_dtype  = torch.float16,
-        device_map   = "auto",
+        torch_dtype = torch.float16,
+        device_map  = "auto",
     )
     target_model.eval()
     print("  Target model loaded.")
+
     print("\n[Setup] Loading your Hindi GPT-2 (draft model A)...")
     your_tokenizer = HFTokenizer.from_file(TOKENIZER_A)
     your_tokenizer.eos_token_id = your_tokenizer.token_to_id("<eos>")
 
-    checkpoint     = torch.load(CHECKPOINT_A, map_location=DEVICE)
-    model_cfg      = ModelConfig_(vocab_size=your_tokenizer.get_vocab_size())
-    draft_model_a  = GPT2_(model_cfg).to(DEVICE)
+    checkpoint    = torch.load(CHECKPOINT_A, map_location=DEVICE)
+    model_cfg     = ModelConfig_(vocab_size=your_tokenizer.get_vocab_size())
+    draft_model_a = GPT2_(model_cfg).to(DEVICE)
     draft_model_a.load_state_dict(checkpoint["model_state"])
     draft_model_a.eval()
     print(f"  Loaded from step {checkpoint['step']:,}")
+
     vocab_aligner = VocabAligner(your_tokenizer, qwen_tokenizer)
+
     results_a = run_experiment(
         name           = "A",
         draft_model    = draft_model_a,
@@ -328,15 +419,18 @@ def main():
         prompts        = prompts,
         output_dir     = OUTPUT_A,
         vocab_aligner  = vocab_aligner,
+        your_tokenizer = your_tokenizer,   
     )
+
     del draft_model_a
     if DEVICE == "cuda":
         torch.cuda.empty_cache()
+
     print("\n[Setup] Loading Qwen2.5-0.5B (draft model B)...")
     draft_model_b = AutoModelForCausalLM.from_pretrained(
         DRAFT_B_ID,
-        torch_dtype  = torch.float16,
-        device_map   = "auto",
+        torch_dtype = torch.float16,
+        device_map  = "auto",
     )
     draft_model_b.eval()
     print("  Draft B loaded.")
@@ -348,8 +442,10 @@ def main():
         qwen_tokenizer = qwen_tokenizer,
         prompts        = prompts,
         output_dir     = OUTPUT_B,
-        vocab_aligner  = None,    
+        vocab_aligner  = None,
+        your_tokenizer = None,
     )
+
     print(f"\n{'='*50}")
     print("FINAL COMPARISON")
     print(f"{'='*50}")
