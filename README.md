@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Indic Speculative Decoding ⚡
 ### Quantifying the Vocabulary Mismatch Problem in Cross-Lingual LLM Inference
 
@@ -205,3 +206,68 @@ indix-speculative-decoding/
 ## License
 
 MIT — see [LICENSE](LICENSE)
+=======
+# Indic Speculative Decoding: Accelerating Hindi LLM Inference
+
+![Python](https://img.shields.io/badge/Python-3.13-blue.svg)
+![PyTorch](https://img.shields.io/badge/PyTorch-2.0%2B-ee4c2c.svg)
+![Transformers](https://img.shields.io/badge/Transformers-HuggingFace-orange.svg)
+
+## 📌 Overview
+**Indic Speculative Decoding** is a high-performance framework dedicated to accelerating the inference of Large Language Models (LLMs) on low-resource Indic languages (specifically Hindi).
+
+By pre-training a custom, highly specialized monolingual **13.9M parameter GPT-2 draft model** from scratch on the `IndicCorp v2` dataset, this project achieves extreme speedups over autoregressive baseline generations of large 7B+ parameter target models (e.g., `Qwen2.5-7B`). Crucially, this validates the hypothesis that a small, domain-specific **monolingual** draft model with robust vocabulary alignment outperforms large generalized **multilingual** draft models (like `Qwen2.5-0.5B`) in Speculative Decoding acceptance rates.
+
+This repository demonstrates start-to-finish capabilities in full-stack AI engineering: from low-level data streaming and BPE tokenizer training, to custom transformer implementations, causal language modeling, and advanced inference optimizations.
+
+## 🚀 Key Features & Engineering Highlights
+- **End-to-End Deep Learning Pipeline**: Complete pipeline spanning from raw data collection to pre-training and speculative decoding.
+- **Custom BPE Tokenizer Trainer**: Optimized Byte-Pair Encoding trained directly on Devanagari text, reducing token fertility and increasing efficiency compared to generic multilingual tokenizers.
+- **Custom GPT-2 Architecture**: Developed a scalable PyTorch Transformer from scratch customized for causality.
+- **Advanced Inference Technique**: Built a Speculative Decoding engine featuring dynamic vocabulary alignment matrices, enabling seamless drafting between a custom tokenizer and a HuggingFace tokenizer.
+- **Benchmarking & Evaluation**: Integrated rigorous metrics evaluating Perplexity (PPL) and Speculative Acceptance Rates against powerful baselines.
+
+## 🧠 Architecture & Methodology
+1. **Data Ingestion**: Streaming `ai4bharat/IndicCorpv2` dataset chunks to avoid RAM bottlenecks. 
+2. **Tokenizer**: A robust BPE tokenizer limiting UNK tokens and matching exact Hindi semantic boundaries.
+3. **Draft Model Training**: Training a 13.9M parameter PyTorch GPT-2 model with precise gradient accumulation, distributed evaluation, and dynamic learning rate decay.
+4. **Speculative Alignment**: Generates *K* tokens via the custom draft model and validates simultaneously utilizing the big target model. Uses a specialized `VocabAligner` to cross-map probability distributions smoothly across differing vocabulary dimensions.
+
+---
+
+## 🛠️ Quick Start
+
+### 1. Prerequisites 
+Ensure you have Python installed. Install the requirements:
+```bash
+pip install -r requirements.txt
+```
+
+### 2. Run the Full Orchestration Pipeline
+The entire process is automated in a sequential pipeline script ranging from dataset download to experimental evaluation plotting.
+
+```bash
+chmod +x run_pipeline.sh
+./run_pipeline.sh
+```
+
+### Breakdown of Pipeline Execution:
+1. **Data Collection**: (`scripts/collect_data.py`) Processes and saves 90/5/5 splits of streaming continuous data into `data/processed/`.
+2. **Tokenizer Setup**: (`tokenizer/train_tokenizer.py`) Fits a `10,000` Vocab size BPE strategy onto the data.
+3. **Baselines**: (`baselines/compute_baselines.py`) Calculates theoretical baseline limitations.
+4. **Model Training**: (`training/train.py`) Trains the PyTorch architecture for 20,000 steps optimizing Causal Language Modeling. 
+5. **Speculative Decoding Tests**: (`speculative_decoding/speculative_decoding.py`) Compares the drafted model against a general `Qwen-0.5B` to map throughput and acceptance speeds!
+
+---
+
+## 📊 Results & Impact
+This experiment provides empirical proof regarding *Scaling Laws in Speculative Decoding* and establishes that:
+**A domain-specific draft model trained explicitly for its target language (Hindi) requires significantly fewer parameters (13.9M vs. 500M) while boosting token acceptance probabilities when paired with a dominant global target model.**
+
+Artifacts, graphical distributions, and scaling curve plots are generated directly into the `/evaluation/results` and `/figures` directories upon standard execution.
+
+---
+
+## 💡 About the Developer
+I'm a passionate AI/ML Engineer focused on democratizing LLMs and making them inherently faster across unstructured frameworks and edge implementations. This project highlights my core proficiency with PyTorch internals, LLM architectures, computational bounds of sequence generation, and production-level Python. Open to roles in Machine Learning Engineering, NLP, and AI Research!
+>>>>>>> 3ee5e8d (setting up git)

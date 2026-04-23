@@ -50,7 +50,7 @@ def collect_hindi_subset(target_size_gb=1.0):
     
     return collected
 
-def save_and_split(texts, output_dir="data"):
+def save_and_split(texts, output_dir="data/processed"):
     import os
     import random
     os.makedirs(output_dir, exist_ok=True)
@@ -76,6 +76,6 @@ def save_and_split(texts, output_dir="data"):
 
 if __name__ == "__main__":
     texts = collect_hindi_subset(target_size_gb=1.0)
-    save_and_split(texts, output_dir="data")
+    save_and_split(texts, output_dir="data/processed")
 
 

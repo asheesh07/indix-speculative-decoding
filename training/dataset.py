@@ -202,14 +202,11 @@ if __name__ == "__main__":
     Run this directly to verify dataset loads correctly before training.
     python training/dataset.py
     """
-    from tokenizers import ByteLevelBPETokenizer
+    from tokenizers import Tokenizer
 
     print("Loading tokenizer...")
-    tokenizer = ByteLevelBPETokenizer(
-        "tokenizer/hindi_bpe/vocab.json",
-        "tokenizer/hindi_bpe/merges.txt",
-    )
-    tokenizer.add_special_tokens(["<eos>", "<pad>", "<unk>"])
+    tokenizer = Tokenizer.from_file("tokenizer/hindi_bpe/tokenizer.json")
+    tokenizer.pad_token_id = tokenizer.token_to_id("<pad>")
     tokenizer.eos_token_id = tokenizer.token_to_id("<eos>")
 
     print("\nRunning sanity check on train set (first 1000 docs)...")

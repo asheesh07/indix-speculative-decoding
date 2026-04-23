@@ -29,7 +29,7 @@ class TrainConfig:
     output_dir:        str   = "checkpoints"
 
 
-    max_steps:         int   = 50_000      
+    max_steps:         int   = 20_000      
     batch_size:        int   = 8           
     grad_accum_steps:  int   = 8           
     seq_len:           int   = 512
@@ -44,7 +44,7 @@ class TrainConfig:
 
 
     warmup_steps:      int   = 2_000        
-    lr_decay_steps:    int   = 50_000       
+    lr_decay_steps:    int   = 20_000       
     min_lr:            float = 3e-5         
 
 
