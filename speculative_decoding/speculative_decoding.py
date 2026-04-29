@@ -32,47 +32,112 @@ def max_fn(x: torch.Tensor) -> torch.Tensor:
 
 class VocabAligner:
     def __init__(self, draft_tokenizer, qwen_tokenizer):
-        print("[Aligner] Building vocabulary alignment map...")
-        draft_vocab  = draft_tokenizer.get_vocab()
+        print("[Aligner] Building byte-level vocabulary alignment map...")
+        draft_vocab = draft_tokenizer.get_vocab()
         qwen_vocab  = qwen_tokenizer.get_vocab()
-        draft_size   = len(draft_vocab)
+        draft_size  = len(draft_vocab)
         qwen_size   = len(qwen_vocab)
-        self.mapping = torch.zeros(draft_size, dtype=torch.long)
-        unk_id = qwen_vocab.get("<unk>", qwen_vocab.get("[UNK]", 1))
 
-        matched = 0
-
+        self.draft_size  = draft_size
+        self.qwen_size   = qwen_size
         self.draft_unk_id = draft_vocab.get("<unk>", draft_vocab.get("[UNK]", 1))
 
+        # For each draft token, store the list of Qwen token IDs it decomposes into
+        # self.mapping[draft_id] = [qwen_id1, qwen_id2, ...]
+        self.mapping      = {}   # draft_id → list of qwen_ids
+        self.single_map   = torch.zeros(draft_size, dtype=torch.long)  # for draft_id_to_qwen_id
+
+        exact_matched = 0
+        byte_matched  = 0
+        unmatched     = 0
+        unk_id        = qwen_vocab.get("<unk>", qwen_vocab.get("[UNK]", 1))
+
         for token_str, draft_id in draft_vocab.items():
+            # Step 1: try exact string match first
             qwen_id = qwen_vocab.get(token_str, None)
             if qwen_id is not None:
-                self.mapping[draft_id] = qwen_id
-                matched += 1
-            else:
-                self.mapping[draft_id] = unk_id
+                self.mapping[draft_id]    = [qwen_id]
+                self.single_map[draft_id] = qwen_id
+                exact_matched += 1
+                continue
 
-        match_pct = matched / draft_size * 100
+            # Step 2: decompose token into UTF-8 bytes
+            # Qwen stores bytes as hex strings like "<0xe0>" or as raw byte chars
+            # Try encoding the token and looking up each byte in Qwen vocab
+            try:
+                token_bytes = token_str.encode("utf-8")
+                qwen_ids = []
+
+                for byte in token_bytes:
+                    # Qwen byte token format: "Ġ" prefix for space, raw byte otherwise
+                    byte_str  = bytes([byte]).decode("latin-1")
+                    byte_hex  = f"<0x{byte:02X}>"
+
+                    # Try multiple formats Qwen uses for byte tokens
+                    bid = (qwen_vocab.get(byte_str)
+                        or qwen_vocab.get(byte_hex)
+                        or qwen_vocab.get(f"▁{byte_str}"))
+
+                    if bid is not None:
+                        qwen_ids.append(bid)
+                    else:
+                        qwen_ids = []
+                        break
+
+                if qwen_ids:
+                    self.mapping[draft_id]    = qwen_ids
+                    self.single_map[draft_id] = qwen_ids[0]  # first byte as primary
+                    byte_matched += 1
+                else:
+                    self.mapping[draft_id]    = [unk_id]
+                    self.single_map[draft_id] = unk_id
+                    unmatched += 1
+
+            except Exception:
+                self.mapping[draft_id]    = [unk_id]
+                self.single_map[draft_id] = unk_id
+                unmatched += 1
+
+        total_matched = exact_matched + byte_matched
+        match_pct     = total_matched / draft_size * 100
+
         print(f"  Draft vocab size:  {draft_size:,}")
-        print(f"  Qwen vocab size:  {qwen_size:,}")
-        print(f"  Tokens matched:   {matched:,} ({match_pct:.1f}%)")
-        print(f"  Tokens unmapped:  {draft_size - matched:,} → mapped to unk")
+        print(f"  Qwen vocab size:   {qwen_size:,}")
+        print(f"  Exact matched:     {exact_matched:,}")
+        print(f"  Byte matched:      {byte_matched:,}")
+        print(f"  Unmatched:         {unmatched:,}")
+        print(f"  Total match rate:  {match_pct:.1f}%")
 
-        self.match_rate  = match_pct
-        self.draft_size   = draft_size
-        self.qwen_size   = qwen_size
+        self.match_rate = match_pct
 
     def align(self, draft_probs: torch.Tensor) -> torch.Tensor:
+        """
+        Map draft vocab probs → Qwen vocab probs.
+        For byte-decomposed tokens, probability is split equally across
+        the constituent byte tokens.
+        """
         qwen_probs = torch.zeros(
             self.qwen_size,
             dtype  = draft_probs.dtype,
             device = draft_probs.device,
         )
-        qwen_probs.scatter_add_(0, self.mapping.to(draft_probs.device), draft_probs)
+
+        for draft_id, qwen_ids in self.mapping.items():
+            prob  = draft_probs[draft_id]
+            share = prob / len(qwen_ids)       # split equally across byte tokens
+            for qid in qwen_ids:
+                qwen_probs[qid] += share
+
         return qwen_probs
 
     def draft_id_to_qwen_id(self, draft_token_id: int) -> int:
-        return self.mapping[draft_token_id].item()
+        return self.single_map[draft_token_id].item()
+
+    def qwen_id_to_draft_id(self, qwen_id: int) -> int:
+        matches = (self.single_map == qwen_id).nonzero(as_tuple=True)[0]
+        if matches.numel() > 0:
+            return matches[0].item()
+        return self.draft_unk_id
 
 
 @torch.no_grad()
